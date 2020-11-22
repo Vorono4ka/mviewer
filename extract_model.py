@@ -1,125 +1,134 @@
-#!/usr/bin/python
-#@majidemo
+import json
+from utils import mkdir
+from utils.reader import Reader
 
-import json, os, sys
-from struct import *
 
-def main(folder):
-    f = open("%s/scene.json" % (folder))
-    data = json.load(f)
-    f.close()
+class Model(Reader):
+    def __init__(self, folder):
+        super().__init__(b'')
 
-    omtl = open("%s/master.mtl" % (folder), "w")
-    for mat in data["materials"]:
-        name = mat["name"]
-        diffuse = mat["albedoTex"]
-        # specular = mat["extrasTex"]
+        with open(f'{folder}/scene.json') as fh:
+            self.scene = json.load(fh)
 
-        # write to file
-        omtl.write("newmtl {0}\n".format(name))
-        omtl.write("map_Ka {0}\n".format(diffuse))
-        omtl.write("map_Kd {0}\n".format(diffuse))
-        # omtl.write("map_Ks {0}\n\n".format(specular))
+        self.folder = folder
+        
+    def parse(self):
+        with open('%s/master.mtl' % self.folder, 'w') as mtl:
+            for mat in self.scene['materials']:
+                name = mat['name']
+                diffuse = mat['albedoTex']
+                # specular = mat['extrasTex']
 
-    omtl.close()
+                # write to file
+                mtl.write('newmtl {0}\n'.format(name))
+                mtl.write('map_Ka {0}\n'.format(diffuse))
+                mtl.write('map_Kd {0}\n'.format(diffuse))
+                # omtl.write('map_Ks {0}\n\n'.format(specular))
+            mtl.close()
+    
+        for mesh in self.scene['meshes']:
+            name = mesh['name']
+            filename = mesh['file']
+            
+            with open(f'{self.folder}/{filename}', 'rb') as dat_file:
+                super().__init__(dat_file.read(), 'little')
+                dat_file.close()
 
-    for mesh in data["meshes"]:
-        name = mesh["name"]
-        dat = mesh["file"]
-        print("converting %s" % dat)
-        # transform = mesh["transform"]
-        wire_count = mesh["wireCount"]
-        index_count = mesh["indexCount"]
-        vertex_count = mesh["vertexCount"]
+            # transform = mesh['transform']
+            wire_count = mesh['wireCount']
+            # index_count = mesh['indexCount']
+            vertex_count = mesh['vertexCount']
+    
+            secondary_texcoord = 0
+            if 'secondary_tex_coord' in mesh:
+                secondary_texcoord = mesh['secondaryTexCoord']
+    
+            vertex_color = 0
+            if 'vertexColor' in mesh:
+                vertex_color = mesh['vertexColor']
+    
+            index_type_size = mesh['indexTypeSize']
+    
+            # TODO: BUG LONG INDICES 
+            # if index_type_size == 4:
+            #     raise Exception('Currently can\'t process any large files with long (uint32) indices... '
+            #                     'To Be Updated!!!')
 
-        tex_coord_2 = 0
-        if "secondaryTexCoord" in mesh:
-            tex_coord_2 = mesh["secondaryTexCoord"]
-
-        vertex_color = 0
-        if "vertexColor" in mesh:
-            vertex_color = mesh["vertexColor"]
-
-        index_type_size = mesh["indexTypeSize"]
-        # consts
-        stride = 32
-        if vertex_color > 0: stride = stride + 4
-        if tex_coord_2 > 0: stride = stride + 8
-
-        # TODO: BUG LONG INDICES
-        # if index_type_size == 4:
-        #     raise Exception("ERROR! Currently can't process any large files with long (uint32) indices... To Be Updated!!!")
-
-        # read stream
-        df = open("%s/%s" % (folder, dat), "rb")
-        # write stream
-        output = open("{0}/{1}.obj".format(folder, dat), "w")
-        output.write("mtllib master.mtl\n")
-
-        # lists
-        face_list = []
-        vert_list = []
-        uv_list = []
-        materials_list = []
-
-        for sub_mesh in mesh["subMeshes"]:
+            mkdir(f'obj/{self.folder}')
+            output = open(f'obj/{self.folder}/{filename}.obj', 'w')
+            output.write('mtllib master.mtl\n')
+    
+            # lists
             faces = []
-            material = sub_mesh["material"]
-            index_count_2 = sub_mesh["indexCount"]
-            wire_count_2 = sub_mesh["wireIndexCount"]
+            vertices = []
+            texcoords = []
+            normals = []
+            materials_list = []
+    
+            for sub_mesh in mesh['subMeshes']:
+                face = []
+                material = sub_mesh['material']
+                index_count_2 = sub_mesh['indexCount']
+                # wire_count_2 = sub_mesh['wireIndexCount']
+    
+                faces_count = index_count_2 // 3
 
-            face_count = int((index_count_2 * index_type_size) / 6)
-            if index_type_size == 4:
-                face_count = int((index_count_2 * index_type_size) / 12)
+                for x in range(faces_count):
+                    face.append((
+                        self.readUInt(index_type_size),
+                        self.readUInt(index_type_size),
+                        self.readUInt(index_type_size)
+                    ))
 
-            # faces
-            for f in range(face_count):
-                if index_type_size == 2:
-                    faces.append(unpack("<HHH", df.read(6)))
-                else:
-                    faces.append(unpack("<III", df.read(12)))
+                faces.append(face)
+                materials_list.append(material)
+    
+            # skip unknown wire count
+            self.read(wire_count * index_type_size)
 
-            # set submesh data
-            face_list.append(faces)
-            materials_list.append(material)
+            # vertices
+            for v in range(vertex_count):
+                vertex = (self.read_float(), self.read_float(), self.read_float())
+                texcoord = (self.read_float(), self.read_float())
+                if secondary_texcoord > 0:
+                    self.read_float()  # u
+                    self.read_float()  # v
 
-        # skip unknown wire count
-        df.seek(wire_count * index_type_size, 1)
+                if vertex_color > 0:
+                    self.read_float()
 
-        # vertices
-        for v in range(vertex_count):
-            # position
-            pos = unpack("<fff", df.read(12))
-            # texcoord
-            texpos = unpack("<ff", df.read(8))
-            # stride
-            df.read(stride - 20)
+                normal = (self.read_float(), self.read_float(), self.read_float())
+    
+                vertices.append(vertex)
+                texcoords.append(texcoord)
+                normals.append(normal)
 
-            vert_list.append(pos)
-            uv_list.append(texpos)
+            for vertex in vertices:
+                output.write('v {0} {1} {2}\n'.format(vertex[0], vertex[1], vertex[2]))
+    
+            for texcoord in texcoords:
+                output.write('vt {0} {1}\n'.format(texcoord[0], 1-texcoord[1]))
 
-        for vert in vert_list:
-            output.write("v {0} {1} {2}\n".format(vert[0], vert[1], vert[2]))
+            for normal in normals:
+                output.write('vn {0} {1} {2}\n'.format(normal[0], normal[1], normal[2]))
 
-        for uv in uv_list:
-            output.write("vt {0} {1}\n".format(uv[0], uv[1]))
+            del vertex, texcoord, normal
+            del vertices, texcoords, normals
 
-        for x, faces in enumerate(face_list):
-            output.write("\n")
-            output.write("g {0}\n".format(name))
-            output.write("usemtl {0}\n".format(materials_list[x]))
+            for x, faces in enumerate(faces):
+                output.write('\n')
+                output.write('g {0}\n'.format(name))
+                output.write('usemtl {0}\n'.format(materials_list[x]))
+    
+                for face in faces:
+                    output.write(
+                        'f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\n'.format(face[0] + 1, face[1] + 1, face[2] + 1)
+                    )
+            output.close()
 
-            for face in faces:
-                output.write("f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\n".format(face[0]+1, face[1]+1, face[2]+1))
+        print('COMPLETED!!!')
 
-        df.close()
-        output.close()
 
-    print("COMPLETED!!!")
-
-def mkDIR(dir):
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-
-if __name__ == "__main__":
-    main(sys.argv[1])
+if __name__ == '__main__':
+    model = Model('x6k7oilwxr')
+    model.parse()

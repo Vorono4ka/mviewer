@@ -1,118 +1,103 @@
-#!/usr/bin/python
-# @majidemo
+from utils import mkdir
+from utils.reader import Reader
 
-import os, io, sys, struct
 
-def main(filename):
-    folder = filename.split(".")[0]
-    mkDIR(folder)
+class MView(Reader):
+    def __init__(self, filename):
+        with open(filename, 'rb') as fh:
+            super().__init__(fh.read(), 'little')
 
-    bin = load(filename)
+        self.filename = filename
 
-    bin.seek(0, 2)
-    end = bin.tell()
-    bin.seek(0)
+    def parse(self):
+        folder = self.filename.split('.')[0]
+        mkdir(folder)
 
-    while bin.tell() < end:
-        name = readcstr(bin)
-        ftype = readcstr(bin)
-        c = readuint32(bin)
-        d = readuint32(bin)
-        e = readuint32(bin)
+        while self.tell() < len(self.buffer):
+            name = self.readString()
+            file_type = self.readString()
 
-        data = bin.read(d)
+            is_compressed = self.readUInt32()
+            compressed_length = self.readUInt32()
+            decompressed_length = self.readUInt32()
 
-        if c & 1:
-            data = decompress(data, e)
+            data = self.read(compressed_length)
 
-        output = open("%s/%s" % (folder, name), "wb")
-        output.write(data)
-        output.close()
+            if is_compressed & 1:
+                data = self.decompress(data, decompressed_length)
 
-        print(name, ftype)
+            output = open('%s/%s' % (folder, name), 'wb')
+            output.write(data)
+            output.close()
 
-    print("COMPLETED!!!")
+            print(name, file_type)
 
-def decompress(a, b):
-    c = bytearray(b)
-    d = 0
-    e = [0] * 4096
-    f = [0] * 4096
-    g = 256
-    h = len(a)
-    k = 0
-    l = 1
-    m = 0
-    n = 1
+        print('COMPLETED!!!')
 
-    c[d] = a[0]
-    d += 1
+    @staticmethod
+    def decompress(a, b):
+        c = bytearray(b)
+        d = 0
+        e = [0] * 4096
+        f = [0] * 4096
+        g = 256
+        h = len(a)
+        k = 0
+        l = 1
+        m = 0
+        n = 1
 
-    r = 1
-    while True:
-        n = r + (r >> 1)
-        if (n + 1) >= h:
-            break
-        m = a[n + 1]
-        n = a[n]
-        p = (m << 4 | n >> 4) if r & 1 else ((m & 15) << 8 | n)
-        if p < g:
-            if 256 > p:
+        c[d] = a[0]
+        d += 1
+
+        r = 1
+        while True:
+            n = r + (r >> 1)
+            if (n + 1) >= h:
+                break
+            m = a[n + 1]
+            n = a[n]
+            p = (m << 4 | n >> 4) if r & 1 else ((m & 15) << 8 | n)
+            if p < g:
+                if 256 > p:
+                    m = d
+                    n = 1
+                    c[d] = p
+                    d += 1
+                else:
+                    m = d
+                    n = f[p]
+                    p = e[p]
+                    q = p + n
+                    while p < q:
+                        c[d] = c[p]
+                        d += 1
+                        p += 1
+            elif p == g:
                 m = d
-                n = 1
-                c[d] = p
-                d += 1
-            else:
-                m = d
-                n = f[p]
-                p = e[p]
-                q = p + n
+                n = l + 1
+                p = k
+                q = k + l
                 while p < q:
                     c[d] = c[p]
                     d += 1
                     p += 1
-        elif p == g:
-            m = d
-            n = l + 1
-            p = k
-            q = k + l
-            while p < q:
-                c[d] = c[p]
+                c[d] = c[k]
                 d += 1
-                p += 1
-            c[d] = c[k]
-            d += 1
-        else:
-            break
+            else:
+                break
 
-        e[g] = k
-        f[g] = l + 1
-        g += 1
-        k = m
-        l = n
-        g = 256 if 4096 <= g else g
-        r += 1
+            e[g] = k
+            f[g] = l + 1
+            g += 1
+            k = m
+            l = n
+            g = 256 if 4096 <= g else g
+            r += 1
 
-    return c if d == b else None
+        return c if d == b else None
 
-def readuint32(f):
-    return struct.unpack("<I", f.read(4))[0]
 
-def readcstr(f):
-    buf = []
-    while True:
-        b = struct.unpack("<b", f.read(1))[0]
-        if b == 0:
-            return "".join(map(chr, buf))
-        else:
-            buf.append(b)
-
-def mkDIR(dir):
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-
-def load(file):
-    return open(file, "rb")
-
-if __name__ == "__main__":
-    main(sys.argv[1])
+if __name__ == '__main__':
+    mview = MView('x6k7oilwxr.mview')
+    mview.parse()
